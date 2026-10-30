@@ -1229,3 +1229,4 @@ Licensed under the [Apache License 2.0](LICENSE).
 </p>
 
 </div>
+## macOS App\n\nSee the `macos/` directory for the experimental macOS native app using Tauri.

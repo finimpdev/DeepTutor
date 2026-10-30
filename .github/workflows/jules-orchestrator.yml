@@ -1,0 +1,82 @@
+name: Jules Orchestrator
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+
+env:
+  JULES_API: https://jules.googleapis.com/v1alpha
+
+jobs:
+  # ---------------------------------------------------------
+  # Job 1: Startet den naechsten pending Jules-Run
+  # ---------------------------------------------------------
+  start-next:
+    name: Naechsten Jules-Run starten
+    if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[task-tick]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Naechste Task-Datei finden
+        id: next
+        run: |
+          FILE=$(grep -l '^status: pending' tasks/*.md | sort -V | head -n1 || true)
+          echo "file=$FILE" >> "$GITHUB_OUTPUT"
+          if [ -n "$FILE" ]; then
+            PROMPT=$(awk '/^---$/{c++; next} c>=2' "$FILE")
+            {
+              echo "prompt<<PROMPT_EOF"
+              echo "$PROMPT"
+              echo "PROMPT_EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Jules Session per API starten
+        if: steps.next.outputs.file != ''
+        run: |
+          jq -n --arg prompt "${{ steps.next.outputs.prompt }}"                  --arg source "sources/github/${{ github.repository }}"             '{
+               prompt: $prompt,
+               sourceContext: {
+                 source: $source,
+                 githubRepoContext: { startingBranch: "main" }
+               }
+             }'           | curl -sf "$JULES_API/sessions" -X POST               -H "Content-Type: application/json"               -H "X-Goog-Api-Key: ${{ secrets.JULES_API_KEY }}"               -d @-
+
+      - name: Task als in-progress markieren
+        if: steps.next.outputs.file != ''
+        run: |
+          sed -i 's/^status: pending/status: in-progress/' "${{ steps.next.outputs.file }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore: [task-tick] start ${{ steps.next.outputs.file }}"
+          git push
+
+  # ---------------------------------------------------------
+  # Job 2: Schliesst den in-progress Task nach Merge ab.
+  # Sein Push loest Job 1 erneut aus -> naechster Run startet.
+  # ---------------------------------------------------------
+  finalize:
+    name: Nach Merge Task abschliessen
+    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: in-progress Task auf done setzen
+        run: |
+          FILE=$(grep -l '^status: in-progress' tasks/*.md | sort -V | head -n1 || true)
+          if [ -n "$FILE" ]; then
+            sed -i 's/^status: in-progress/status: done/' "$FILE"
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git commit -am "chore: [task-tick] done $FILE"
+            git push
+          fi

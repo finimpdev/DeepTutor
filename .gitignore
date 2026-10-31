@@ -294,3 +294,6 @@ dmypy.json
 *.mp3
 *.wav
 *.ogg
+macos/target/
+macos/node_modules/
+macos/src-tauri/target/
